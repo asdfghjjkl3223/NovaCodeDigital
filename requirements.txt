@@ -2,6 +2,6 @@ streamlit
 google-generativeai
 moviepy==1.0.3
 supabase
-yt-dlp
+yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@master
 ffmpeg-python
 imageio-ffmpeg
