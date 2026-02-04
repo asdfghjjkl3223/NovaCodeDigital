@@ -2,9 +2,11 @@ import streamlit as st
 import google.generativeai as genai
 from moviepy.editor import VideoFileClip
 from supabase import create_client, Client
-import yt_dlp
 import tempfile
 import os
+import smtplib
+from email.mime.text import MIMEText
+import random
 import time
 
 # --- CONFIGURATION & SECRETS ---
@@ -12,23 +14,25 @@ try:
     GENAI_KEY = st.secrets["GEMINI_API_KEY"]
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    
+    # AUTH SECRETS
+    ADMIN_EMAIL = st.secrets["ADMIN_EMAIL"]
+    ADMIN_PASSWORD = st.secrets["ADMIN_PASSWORD"]
+    
+    # EMAIL SECRETS
+    SENDER_EMAIL = st.secrets["EMAIL_SENDER"]
+    SENDER_PASSWORD = st.secrets["EMAIL_PASSWORD"]
+    
 except:
-    GENAI_KEY = "TEST"
-    SUPABASE_URL = "TEST"
-    SUPABASE_KEY = "TEST"
+    st.error("⚠️ Secrets Missing! Please check Streamlit settings.")
+    st.stop()
 
 if GENAI_KEY != "TEST":
     genai.configure(api_key=GENAI_KEY)
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- ADMIN DETAILS ---
-ADMIN_EMAIL = "neeraj14soni78@gmail.com"
-ADMIN_PASSWORD = "Neerajansh123"  # <-- Password yahan badal sakte hain
-
 # --- TEMP MAIL BLOCKER ---
 TEMP_DOMAINS = ["tempmail", "10minutemail", "guerrillamail", "yopmail", "mailinator"]
-
-# --- HELPER FUNCTIONS ---
 
 def is_temp_mail(email):
     if "@" in email:
@@ -37,142 +41,171 @@ def is_temp_mail(email):
             if temp in domain: return True
     return False
 
+# --- EMAIL OTP FUNCTION ---
+def send_otp_email(to_email):
+    otp_code = str(random.randint(1000, 9999)) # 4 Digit Code
+    
+    subject = "Verify your AI Viral Studio Account"
+    body = f"Hello,\n\nYour Verification Code is: {otp_code}\n\nUse this to activate your account.\n\nRegards,\nAI Viral Team"
+    
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = to_email
+    
+    try:
+        # Gmail Server Connection
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.sendmail(SENDER_EMAIL, to_email, msg.as_string())
+        server.quit()
+        return otp_code
+    except Exception as e:
+        return None
+
+# --- DB FUNCTIONS ---
 def login_user(email, password):
     try:
         response = supabase.table('users').select("*").eq('email', email).eq('password', password).execute()
         return response.data[0] if response.data else None
     except: return None
 
-def register_user(email, password):
-    if is_temp_mail(email): return "TEMP_MAIL_ERROR"
+def register_user_final(email, password):
+    """OTP Verify hone ke baad ye chalega"""
     try:
-        check = supabase.table('users').select("*").eq('email', email).execute()
-        if check.data: return "USER_EXISTS"
-        
-        # Default: Free Account (2 Credits)
         new_user = {"email": email, "password": password, "credits": 2, "is_premium": False}
         supabase.table('users').insert(new_user).execute()
-        return "SUCCESS"
-    except Exception as e:
-        return f"Error: {e}"
+        return True
+    except:
+        return False
 
 def update_credits(email, current_credits):
     try:
         supabase.table('users').update({"credits": current_credits - 1}).eq('email', email).execute()
     except: pass
 
-def download_youtube_video(url):
-    """YouTube Fix: Force IPv4 & Latest Client"""
-    output_filename = "downloaded_yt_video.mp4"
-    if os.path.exists(output_filename): os.remove(output_filename)
-    
-    # Powerful Settings to Bypass Blocks
-    ydl_opts = {
-        'format': 'best[ext=mp4]/best',
-        'outtmpl': output_filename,
-        'quiet': True,
-        'no_warnings': True,
-        'source_address': '0.0.0.0', # Force IPv4 connection (Fixes 403)
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}}, # Try Hybrid Client
-    }
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        return output_filename
-    except Exception as e:
-        print(f"YouTube Download Failed: {e}")
-        return None
-
-# --- UI START ---
+# --- UI CONFIG ---
 st.set_page_config(page_title="AI Viral Studio", page_icon="🎥")
 
-# --- AUTH SYSTEM ---
+# --- AUTH SYSTEM (WITH OTP) ---
 if "user_email" not in st.session_state:
     st.title("👋 AI Viral Studio")
+    st.markdown("### Upload & Create Viral Shorts 🚀")
     
     tab_login, tab_signup = st.tabs(["Login", "Create Account"])
 
-    # Login Tab
+    # LOGIN TAB
     with tab_login:
         l_email = st.text_input("Email", key="l_email")
         l_pass = st.text_input("Password", type="password", key="l_pass")
         if st.button("Login"):
-            # Admin Check
             if l_email == ADMIN_EMAIL and l_pass == ADMIN_PASSWORD:
                 st.session_state.user_email = l_email
                 st.success("Welcome Admin!")
                 st.rerun()
-            
-            # User Check
             user = login_user(l_email, l_pass)
             if user:
                 st.session_state.user_email = user['email']
                 st.rerun()
             else:
-                st.error("Email ya Password galat hai.")
+                st.error("Galat Email ya Password!")
 
-    # Signup Tab
+    # SIGNUP TAB (OTP LOGIC)
     with tab_signup:
-        s_email = st.text_input("New Email", key="s_email")
-        s_pass = st.text_input("New Password", type="password", key="s_pass")
-        if st.button("Sign Up"):
-            if len(s_pass) < 4:
-                st.warning("Password thoda strong rakhein.")
-            else:
-                res = register_user(s_email, s_pass)
-                if res == "SUCCESS":
-                    st.session_state.user_email = s_email
-                    st.success("Account Ban Gaya!")
+        if "signup_step" not in st.session_state:
+            st.session_state.signup_step = 1
+        
+        # STEP 1: ENTER DETAILS
+        if st.session_state.signup_step == 1:
+            s_email = st.text_input("New Email", key="s_email")
+            s_pass = st.text_input("New Password", type="password", key="s_pass")
+            
+            if st.button("Send Verification Code"):
+                if is_temp_mail(s_email):
+                    st.error("Temp Mail not allowed!")
+                elif len(s_pass) < 4:
+                    st.warning("Password weak hai.")
+                else:
+                    check = supabase.table('users').select("*").eq('email', s_email).execute()
+                    if check.data:
+                        st.error("Account pehle se hai. Login karein.")
+                    else:
+                        with st.spinner("Sending OTP..."):
+                            otp = send_otp_email(s_email)
+                            if otp:
+                                st.session_state.generated_otp = otp
+                                st.session_state.temp_email = s_email
+                                st.session_state.temp_pass = s_pass
+                                st.session_state.signup_step = 2
+                                st.success("OTP sent to your email!")
+                                st.rerun()
+                            else:
+                                st.error("Email Error. Check Secrets.")
+
+        # STEP 2: VERIFY OTP
+        elif st.session_state.signup_step == 2:
+            st.info(f"OTP sent to: {st.session_state.temp_email}")
+            user_otp = st.text_input("Enter 4-Digit OTP")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Verify & Create Account"):
+                    if user_otp == st.session_state.generated_otp:
+                        success = register_user_final(st.session_state.temp_email, st.session_state.temp_pass)
+                        if success:
+                            st.session_state.user_email = st.session_state.temp_email
+                            del st.session_state.generated_otp
+                            del st.session_state.signup_step
+                            st.success("Account Verified!")
+                            st.rerun()
+                        else:
+                            st.error("Database Error.")
+                    else:
+                        st.error("Wrong OTP! Try again.")
+            
+            with col2:
+                if st.button("Cancel / Back"):
+                    st.session_state.signup_step = 1
                     st.rerun()
-                elif res == "USER_EXISTS": st.error("Account pehle se bana hai. Login karein.")
-                elif res == "TEMP_MAIL_ERROR": st.error("Temp mail allowed nahi hai.")
-                else: st.error(res)
+    
     st.stop()
 
-# --- MAIN APP LOGIC ---
+# --- MAIN LOGIC (LOGGED IN) ---
 
-# 1. Fetch User Data
+# 1. Fetch User
 is_admin = False
 user = None
-if GENAI_KEY != "TEST":
-    if st.session_state.user_email == ADMIN_EMAIL:
-        user = {"email": ADMIN_EMAIL, "credits": 9999, "is_premium": True}
-        is_admin = True
-    else:
+if st.session_state.user_email == ADMIN_EMAIL:
+    user = {"email": ADMIN_EMAIL, "credits": 9999, "is_premium": True}
+    is_admin = True
+else:
+    try:
         response = supabase.table('users').select("*").eq('email', st.session_state.user_email).execute()
         user = response.data[0] if response.data else None
+    except: user = None
 
-# 2. Sidebar & Admin Panel
+# 2. Admin Panel
 if is_admin:
     st.sidebar.markdown("### 👮‍♂️ Admin Panel")
-    st.sidebar.success("Mode: User Manager")
-    
-    st.sidebar.info("Jis User ko Premium dena hai uska Email likhein:")
     target_email = st.sidebar.text_input("User Email ID:")
-    
-    if st.sidebar.button("Upgrade to Premium ✅"):
-        if target_email:
-            try:
-                # Update Query
-                response = supabase.table('users').update({"is_premium": True, "credits": 9999}).eq('email', target_email).execute()
-                if response.data:
-                    st.sidebar.success(f"Done! {target_email} ab Premium hai.")
-                else:
-                    st.sidebar.error("Yeh Email Database mein nahi mili.")
-            except Exception as e:
-                st.sidebar.error(f"Error: {e}")
-        else:
-            st.sidebar.warning("Email to likho pehle!")
-            
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("Make Premium ✅"):
+            if target_email:
+                supabase.table('users').update({"is_premium": True, "credits": 9999}).eq('email', target_email).execute()
+                st.sidebar.success("Premium Active!")
+    with col2:
+        if st.button("Remove Premium ❌"):
+            if target_email:
+                supabase.table('users').update({"is_premium": False, "credits": 2}).eq('email', target_email).execute()
+                st.sidebar.error("Premium Removed!")
     st.sidebar.divider()
     if st.sidebar.button("Logout Admin"):
         del st.session_state.user_email
         st.rerun()
 
 else:
-    # Normal User Sidebar
-    st.sidebar.write(f"ID: {user['email']}")
+    if user: st.sidebar.write(f"ID: {user['email']}")
     if st.sidebar.button("Logout"):
         del st.session_state.user_email
         st.rerun()
@@ -181,43 +214,28 @@ else:
 has_access = False
 if user and (user['is_premium'] or is_admin):
     has_access = True
-    st.sidebar.success("🌟 Premium Plan Active")
+    st.sidebar.success("🌟 Premium Plan")
 elif user and user['credits'] > 0:
     has_access = True
     st.sidebar.info(f"Free Credits: {user['credits']}")
 
-# 4. Tool Interface
+# 4. Upload & Process
 if has_access:
     st.title("✂️ AI Viral Studio")
-    tab1, tab2 = st.tabs(["📤 Upload Video", "🔗 YouTube Link"])
+    st.write("Upload Large Video (Max 1GB)")
+    
     video_path = None
+    uf = st.file_uploader("Upload MP4", type=["mp4"])
     
-    with tab1:
-        uf = st.file_uploader("Upload MP4", type=["mp4"])
-        if uf:
-            tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-            tfile.write(uf.read())
-            video_path = tfile.name
-            
-    with tab2:
-        yt_url = st.text_input("Paste YouTube Link:")
-        if yt_url:
-            if st.button("Download Video"):
-                with st.spinner("Downloading... (Using Cloud Fix)"):
-                    path = download_youtube_video(yt_url)
-                    if path:
-                        st.session_state['vpath'] = path
-                        st.success("Video Loaded!")
-                    else:
-                        st.error("YouTube Error: Server IP Blocked. Please use Upload Option.")
-    
-    if 'vpath' in st.session_state and os.path.exists(st.session_state['vpath']):
-        video_path = st.session_state['vpath']
+    if uf:
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        tfile.write(uf.read())
+        video_path = tfile.name
         
     if video_path:
         st.video(video_path)
-        if st.button("✨ Make Viral Short"):
-            with st.spinner('AI Cutting & Resizing...'):
+        if st.button("✨ Make Viral Short (1 Credit)"):
+            with st.spinner('Processing...'):
                 try:
                     clip = VideoFileClip(video_path)
                     dur = clip.duration
@@ -236,13 +254,19 @@ if has_access:
                         update_credits(user['email'], user['credits'])
                         
                     with open(out, "rb") as f:
-                        st.download_button("Download Viral Video", f, file_name="viral.mp4")
-                except Exception as e: st.error(f"Processing Error: {e}")
+                        st.download_button("Download", f, file_name="viral.mp4")
+                except Exception as e: st.error(f"Error: {e}")
 
 else:
     st.error("Free Limit Khatam!")
     
-    MY_NUMBER = "919575887748" 
-    msg = f"Hello! My ID is {user['email']}. I want to upgrade to Premium."
+    # --- PRICING & WHATSAPP SECTION ---
+    st.markdown("### 🔓 Unlock Unlimited Access")
+    st.write("**Plan:** ₹99 for 1 Month")
+    
+    MY_NUMBER = "919575887748"
+    # Is message mein change kiya gaya hai 👇
+    msg = f"Hello! My ID is {user['email'] if user else 'User'}. I want to buy Premium Plan for ₹99 for 1 Month."
     url = f"https://wa.me/{MY_NUMBER}?text={msg.replace(' ', '%20')}"
-    st.link_button("👉 Upgrade on WhatsApp", url)
+    
+    st.link_button("👉 Buy Premium (₹99/Month)", url)
