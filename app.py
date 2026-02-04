@@ -8,7 +8,7 @@ import smtplib
 from email.mime.text import MIMEText
 import random
 import time
-import cv2 # Eyes (Face Tracking)
+import cv2
 import json
 import re
 
@@ -72,13 +72,15 @@ def update_credits(email, current_credits):
         supabase.table('users').update({"credits": current_credits - 1}).eq('email', email).execute()
     except: pass
 
-# --- 3. INTELLIGENT AI FUNCTIONS ---
+# --- 3. INTELLIGENT AI FUNCTIONS (ROBUST FIX) ---
 
 def get_smart_crop_focus(video_path, start_time, end_time):
-    """Face Detection Logic (Eyes)"""
+    """Face Detection (Eyes)"""
     try:
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps == 0: return 50
+        
         mid_frame = int((start_time + (end_time - start_time)/2) * fps)
         cap.set(cv2.CAP_PROP_POS_FRAMES, mid_frame)
         ret, frame = cap.read()
@@ -102,23 +104,47 @@ def get_smart_crop_focus(video_path, start_time, end_time):
     except: return 50
 
 def analyze_viral_moments_gemini(video_path):
-    """Gemini Analysis (Brain)"""
+    """Gemini Analysis (Fixed Brain)"""
     try:
+        # 1. Upload
         video_file = genai.upload_file(video_path)
+        
+        # Wait for processing (Max 60 seconds wait)
+        wait_time = 0
         while video_file.state.name == "PROCESSING":
             time.sleep(2)
+            wait_time += 2
             video_file = genai.get_file(video_file.name)
-        if video_file.state.name == "FAILED": return None
+            if wait_time > 60: return [] # Timeout fix
+            
+        if video_file.state.name == "FAILED": return []
 
+        # 2. Strict Prompt
         prompt = """
-        Find 2 most viral short segments from this video.
-        Return ONLY JSON list: [{"start": 10, "end": 25, "title": "Funny"}, {"start": 40, "end": 60, "title": "Lesson"}]
+        You are a video editor. Find exactly 2 most viral/interesting short segments from this video.
+        OUTPUT REQUIREMENT: Return ONLY a raw JSON list. Do not use Markdown. Do not write "Here is the json".
+        Format: [{"start": 10, "end": 25, "title": "Clip1"}, {"start": 40, "end": 55, "title": "Clip2"}]
         """
+        
         model = genai.GenerativeModel(model_name="gemini-1.5-flash")
         response = model.generate_content([video_file, prompt])
-        txt = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(txt)
-    except: return []
+        
+        # 3. Robust Parsing (Fix for "AI couldn't analyze")
+        text = response.text
+        
+        # Extract JSON from text using regex (brackets ke beech ka maal uthao)
+        match = re.search(r'\[.*\]', text, re.DOTALL)
+        if match:
+            json_str = match.group(0)
+            return json.loads(json_str)
+        else:
+            # Fallback parsing
+            clean_text = text.replace("```json", "").replace("```", "").strip()
+            return json.loads(clean_text)
+            
+    except Exception as e:
+        print(f"Gemini Error: {e}")
+        return []
 
 # --- 4. UI SETUP ---
 st.set_page_config(page_title="AI Viral Studio", page_icon="🎥", layout="wide")
@@ -212,24 +238,23 @@ if has_access:
         video_path = st.session_state["cached_video_path"]
         st.video(video_path)
         
-        # --- ENHANCE CHECKBOX (OLD LOGIC RESTORED) ---
-        enhance_mode = st.checkbox("✨ Enhance Quality (Bright & Sharp)", value=True, help="Applies old enhancement filters")
+        # Enhance Checkbox
+        enhance_mode = st.checkbox("✨ Enhance Quality (Bright & Sharp)", value=True)
         
-        # --- AUTO GENERATE BUTTON ---
         if st.button("✨ Auto-Generate Viral Shorts (1 Credit)"):
             with st.status("🤖 AI is working magic...", expanded=True) as status:
                 
-                # STEP 1: BRAIN (Gemini)
-                status.write("🧠 Analyzing video content for viral moments...")
+                # 1. BRAIN
+                status.write("🧠 Finding viral segments...")
                 clips_data = analyze_viral_moments_gemini(video_path)
                 
                 if not clips_data:
-                    status.error("AI couldn't analyze. Try a clearer video.")
+                    status.error("AI couldn't analyze. Please try a different video.")
                     st.stop()
                 
-                status.write(f"✅ Found {len(clips_data)} viral segments!")
+                status.write(f"✅ Found {len(clips_data)} clips!")
                 
-                # STEP 2: EYES (OpenCV) & HANDS (FFmpeg)
+                # 2. EYES & HANDS
                 original_clip = VideoFileClip(video_path)
                 
                 for i, c_data in enumerate(clips_data):
@@ -237,38 +262,35 @@ if has_access:
                     end = c_data['end']
                     label = c_data.get('title', f"Viral Clip {i+1}")
                     
-                    status.write(f"👀 Tracking Character Face for: {label}...")
+                    status.write(f"👀 Tracking Face: {label}...")
                     
-                    # Auto Detect Face Position (0-100)
                     face_pos = get_smart_crop_focus(video_path, start, end)
                     
-                    # Crop Logic
+                    # Ensure valid time range
+                    if end > original_clip.duration: end = original_clip.duration
+                    if start >= end: continue
+
                     sub = original_clip.subclip(start, end)
                     w, h = sub.size
                     new_w = int(h * (9/16))
                     if new_w % 2 != 0: new_w -= 1
                     
-                    # Convert Face % to Pixel X
                     max_x = w - new_w
                     x1 = int((face_pos / 100) * max_x)
                     
-                    # Crop
                     final_clip = sub.crop(x1=x1, width=new_w, height=h)
                     
                     out_name = f"auto_viral_{i}_{int(time.time())}.mp4"
                     
-                    # --- RESTORED ENHANCEMENT LOGIC ---
-                    ffmpeg_options = ['-pix_fmt', 'yuv420p'] # Default (Mobile Fix)
-                    
+                    ffmpeg_opts = ['-pix_fmt', 'yuv420p']
                     if enhance_mode:
-                        # Wahi purana logic jo aapko pasand tha
-                        ffmpeg_options.extend(['-vf', 'eq=contrast=1.1:saturation=1.3,unsharp=5:5:1.0:5:5:0.0'])
+                        ffmpeg_opts.extend(['-vf', 'eq=contrast=1.1:saturation=1.3,unsharp=5:5:1.0:5:5:0.0'])
                     
                     final_clip.write_videofile(
                         out_name, 
                         codec='libx264', 
                         audio_codec='aac', 
-                        ffmpeg_params=ffmpeg_options,
+                        ffmpeg_params=ffmpeg_opts,
                         logger=None
                     )
                     
@@ -279,13 +301,11 @@ if has_access:
                             "name": out_name
                         })
                 
-                # Deduct Credit
                 if not user['is_premium'] and not is_admin:
                     update_credits(user['email'], user['credits'])
                 
-                status.update(label="✅ All Done! Clips Ready below.", state="complete")
+                status.update(label="✅ Success!", state="complete")
 
-    # DISPLAY RESULTS
     if st.session_state['generated_clips']:
         st.markdown("### 🔥 Ready Viral Shorts")
         for clip in st.session_state['generated_clips']:
