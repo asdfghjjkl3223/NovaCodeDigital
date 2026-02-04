@@ -23,7 +23,7 @@ if GENAI_KEY != "TEST":
 
 # --- ADMIN DETAILS ---
 ADMIN_EMAIL = "neeraj14soni78@gmail.com"
-ADMIN_PASSWORD = "Neerajansh123"  # <-- Password yahan set karein
+ADMIN_PASSWORD = "Neerajansh123"  # <-- Password yahan badal sakte hain
 
 # --- TEMP MAIL BLOCKER ---
 TEMP_DOMAINS = ["tempmail", "10minutemail", "guerrillamail", "yopmail", "mailinator"]
@@ -62,31 +62,27 @@ def update_credits(email, current_credits):
     except: pass
 
 def download_youtube_video(url):
-    """YouTube Fix: Try Android then iOS client"""
+    """YouTube Fix: Force IPv4 & Latest Client"""
     output_filename = "downloaded_yt_video.mp4"
     if os.path.exists(output_filename): os.remove(output_filename)
     
-    # Try Android Client
-    opts = {
+    # Powerful Settings to Bypass Blocks
+    ydl_opts = {
         'format': 'best[ext=mp4]/best',
         'outtmpl': output_filename,
         'quiet': True,
-        'extractor_args': {'youtube': {'player_client': ['android']}},
+        'no_warnings': True,
+        'source_address': '0.0.0.0', # Force IPv4 connection (Fixes 403)
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}}, # Try Hybrid Client
     }
     
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         return output_filename
-    except:
-        # Try iOS Client if Android fails
-        try:
-            opts['extractor_args'] = {'youtube': {'player_client': ['ios']}}
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([url])
-            return output_filename
-        except:
-            return None
+    except Exception as e:
+        print(f"YouTube Download Failed: {e}")
+        return None
 
 # --- UI START ---
 st.set_page_config(page_title="AI Viral Studio", page_icon="🎥")
@@ -147,28 +143,27 @@ if GENAI_KEY != "TEST":
         response = supabase.table('users').select("*").eq('email', st.session_state.user_email).execute()
         user = response.data[0] if response.data else None
 
-# 2. Sidebar & Admin Panel (UPDATED FOR YOU)
+# 2. Sidebar & Admin Panel
 if is_admin:
     st.sidebar.markdown("### 👮‍♂️ Admin Panel")
-    st.sidebar.success("Mode: Upgrade Users")
+    st.sidebar.success("Mode: User Manager")
     
-    st.sidebar.info("User ki Email dalein jise Premium banana hai:")
+    st.sidebar.info("Jis User ko Premium dena hai uska Email likhein:")
     target_email = st.sidebar.text_input("User Email ID:")
     
     if st.sidebar.button("Upgrade to Premium ✅"):
         if target_email:
             try:
-                # Sirf update query chalegi
+                # Update Query
                 response = supabase.table('users').update({"is_premium": True, "credits": 9999}).eq('email', target_email).execute()
-                # Check agar user exist karta tha
                 if response.data:
-                    st.sidebar.success(f"Success! {target_email} ab Premium hai.")
+                    st.sidebar.success(f"Done! {target_email} ab Premium hai.")
                 else:
                     st.sidebar.error("Yeh Email Database mein nahi mili.")
             except Exception as e:
                 st.sidebar.error(f"Error: {e}")
         else:
-            st.sidebar.warning("Pehle Email likhein.")
+            st.sidebar.warning("Email to likho pehle!")
             
     st.sidebar.divider()
     if st.sidebar.button("Logout Admin"):
@@ -205,16 +200,16 @@ if has_access:
             video_path = tfile.name
             
     with tab2:
-        yt_url = st.text_input("Paste Link:")
+        yt_url = st.text_input("Paste YouTube Link:")
         if yt_url:
             if st.button("Download Video"):
-                with st.spinner("Downloading..."):
+                with st.spinner("Downloading... (Using Cloud Fix)"):
                     path = download_youtube_video(yt_url)
                     if path:
                         st.session_state['vpath'] = path
                         st.success("Video Loaded!")
                     else:
-                        st.error("YouTube Error: Please use Upload option.")
+                        st.error("YouTube Error: Server IP Blocked. Please use Upload Option.")
     
     if 'vpath' in st.session_state and os.path.exists(st.session_state['vpath']):
         video_path = st.session_state['vpath']
