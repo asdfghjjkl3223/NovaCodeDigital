@@ -8,6 +8,7 @@ import smtplib
 from email.mime.text import MIMEText
 import random
 import time
+import datetime
 
 # --- 1. CONFIGURATION & SECRETS ---
 try:
@@ -142,12 +143,11 @@ if not user:
         st.rerun()
     st.stop()
 
-# --- 6. SIDEBAR (ADMIN LIST FEATURE) ---
+# --- 6. SIDEBAR ---
 st.sidebar.title("🛠️ Menu")
 
 if is_admin:
     st.sidebar.header("👮‍♂️ Admin Panel")
-    
     with st.sidebar.expander("➕ Add Premium User", expanded=True):
         add_email = st.text_input("Email Address:", placeholder="user@gmail.com")
         if st.button("Grant Premium ✅"):
@@ -156,108 +156,138 @@ if is_admin:
                 st.success(f"Added: {add_email}")
                 time.sleep(1)
                 st.rerun()
-
     st.sidebar.markdown("---")
     st.sidebar.subheader("📋 Active Premium Users")
-    
     try:
         p_users = supabase.table('users').select("email").eq('is_premium', True).execute()
         if p_users.data:
             for p_user in p_users.data:
                 if p_user['email'] == ADMIN_EMAIL: continue
-                
                 c1, c2 = st.sidebar.columns([3, 1])
                 c1.text(p_user['email'])
-                
                 if c2.button("❌", key=f"rm_{p_user['email']}", help="Make Free"):
                     supabase.table('users').update({"is_premium": False, "credits": 2}).eq('email', p_user['email']).execute()
                     st.toast(f"Removed: {p_user['email']}")
                     time.sleep(1)
                     st.rerun()
                 st.sidebar.markdown("---")
-        else:
-            st.sidebar.info("No Active Premium Users.")
+        else: st.sidebar.info("No Active Premium Users.")
     except: st.sidebar.error("Loading Error...")
-
 else:
     st.sidebar.write(f"User: **{user['email']}**")
-    if user['is_premium']:
-        st.sidebar.success("🌟 Premium Active")
-    else:
-        st.sidebar.info(f"Free Credits: {user['credits']}")
+    if user['is_premium']: st.sidebar.success("🌟 Premium Active")
+    else: st.sidebar.info(f"Free Credits: {user['credits']}")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("Logout"):
     del st.session_state.user_email
     st.rerun()
 
-# --- 7. MAIN APP TOOL (FIXED EVEN WIDTH ISSUE) ---
+# --- 7. MAIN TOOL (ENHANCE & MULTI-CLIP) ---
 has_access = user['is_premium'] or user['credits'] > 0
 
 if has_access:
     st.title("✂️ AI Viral Studio")
-    st.write("Upload Video (Max 1GB)")
     
-    uf = st.file_uploader("Upload MP4", type=["mp4"])
+    if 'history' not in st.session_state:
+        st.session_state['history'] = []
+
+    uf = st.file_uploader("Upload MP4 (Ek baar upload karein, baar-baar use karein)", type=["mp4"])
     
     if uf:
-        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        tfile.write(uf.read())
-        st.video(tfile.name)
+        if "cached_video_path" not in st.session_state:
+            tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+            tfile.write(uf.read())
+            st.session_state["cached_video_path"] = tfile.name
         
-        if st.button("✨ Make Viral Short (1 Credit)"):
-            with st.spinner("Processing (Auto-Fixing Dimensions)..."):
+        video_path = st.session_state["cached_video_path"]
+        clip = VideoFileClip(video_path)
+        total_duration = clip.duration
+        
+        st.video(video_path)
+        
+        st.markdown("### 🛠️ Create & Enhance")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            start_sec = st.slider("🎬 Start Time", 0, int(total_duration), 0, help="Start point of clip")
+        with c2:
+            camera_pos = st.slider("📷 Camera Focus (Left-Right)", 0, 100, 50, help="Fix cut character")
+
+        # --- ENHANCE CHECKBOX ---
+        enhance_mode = st.checkbox("✨ Enhance Quality (HD Colors & Sharpness)", value=True, help="Makes video brighter and sharper")
+
+        st.markdown("---")
+        
+        if st.button("✨ Create Viral Short (1 Credit)"):
+            with st.spinner("Processing & Enhancing..."):
                 try:
-                    clip = VideoFileClip(tfile.name)
-                    dur = clip.duration
-                    start = dur/3 if dur > 60 else 0
-                    sub = clip.subclip(start, min(start+30, dur))
+                    end_sec = min(start_sec + 30, total_duration)
+                    if end_sec <= start_sec:
+                        start_sec = 0
+                        end_sec = min(30, total_duration)
+                        
+                    sub = clip.subclip(start_sec, end_sec)
                     
                     w, h = sub.size
+                    new_w = int(h * (9/16))
+                    if new_w % 2 != 0: new_w -= 1
                     
-                    # --- MATH FIX START: Ensure even numbers ---
-                    target_ratio = 9/16
-                    new_w = int(h * target_ratio)
-                    
-                    # Agar number Odd hai (2 se divide nahi hota), toh 1 minus kar do
-                    if new_w % 2 != 0:
-                        new_w -= 1
-                    
-                    # Resize crop logic
                     if new_w < w:
-                        sub = sub.crop(x1=w/2-new_w/2, width=new_w, height=h)
-                    # --- MATH FIX END ---
+                        max_x = w - new_w
+                        x1 = int((camera_pos / 100) * max_x)
+                        sub = sub.crop(x1=x1, width=new_w, height=h)
                     
-                    out = "viral.mp4"
+                    timestamp = datetime.datetime.now().strftime("%H%M%S")
+                    out_name = f"viral_{timestamp}.mp4"
+                    
+                    # --- MAGIC ENHANCEMENT SETTINGS ---
+                    # eq=contrast=1.1:saturation=1.3 (Colors badhao)
+                    # unsharp=5:5:1.0 (Blur hatao, sharp karo)
+                    
+                    ffmpeg_options = ['-pix_fmt', 'yuv420p'] # Default fix
+                    
+                    if enhance_mode:
+                        # Add Color & Sharpness Filter
+                        ffmpeg_options.extend(['-vf', 'eq=contrast=1.1:saturation=1.3,unsharp=5:5:1.0:5:5:0.0'])
                     
                     sub.write_videofile(
-                        out, 
+                        out_name, 
                         codec='libx264', 
                         audio_codec='aac', 
-                        ffmpeg_params=['-pix_fmt', 'yuv420p'], # Mobile black screen fix
+                        ffmpeg_params=ffmpeg_options, 
                         logger=None
                     )
+                    
+                    with open(out_name, "rb") as f:
+                        video_bytes = f.read()
+                        st.session_state['history'].append({
+                            "name": out_name,
+                            "data": video_bytes,
+                            "time": f"Time: {start_sec}s | Enhanced: {'Yes' if enhance_mode else 'No'}"
+                        })
                     
                     if not user['is_premium'] and not is_admin:
                         update_credits(user['email'], user['credits'])
                     
-                    st.success("Video Ready!")
-                    
-                    with open(out, "rb") as f:
-                        video_bytes = f.read()
-                        st.video(video_bytes)
-                        st.download_button("Download Viral Short", video_bytes, "viral_short.mp4")
-                        
+                    st.success(f"Video Enhanced & Created!")
+
                 except Exception as e: st.error(f"Error: {e}")
+
+    # HISTORY
+    if st.session_state['history']:
+        st.markdown("### 📂 Generated Shorts")
+        for idx, item in enumerate(reversed(st.session_state['history'])):
+            with st.expander(f"Video {len(st.session_state['history']) - idx} ({item['time']})", expanded=True):
+                st.video(item['data'])
+                st.download_button("📥 Download", item['data'], item['name'])
+
 else:
     st.title("🔒 Quota Expired")
     st.error("Free Credits khatam!")
-    
     st.markdown("### 🔓 Unlimited Access")
     st.write("💰 **Price: ₹99 / Month**")
-    
     MY_NUMBER = "919575887748"
     msg = f"Hello! My ID is {user['email']}. I want to buy Premium Plan for ₹99 for 1 Month."
     url = f"https://wa.me/{MY_NUMBER}?text={msg.replace(' ', '%20')}"
-    
     st.link_button("👉 Buy Premium on WhatsApp", url)
