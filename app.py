@@ -169,26 +169,19 @@ if is_admin:
         
         if p_users.data:
             for p_user in p_users.data:
-                # Admin khud ko na dikhaye
-                if p_user['email'] == ADMIN_EMAIL:
-                    continue
+                if p_user['email'] == ADMIN_EMAIL: continue
                 
-                # Layout: Email | Remove Button
                 c1, c2 = st.sidebar.columns([3, 1])
-                
                 c1.text(p_user['email'])
                 
-                # Make Free Button
-                if c2.button("❌", key=f"rm_{p_user['email']}", help="Click to Make Free User"):
+                if c2.button("❌", key=f"rm_{p_user['email']}", help="Make Free"):
                     supabase.table('users').update({"is_premium": False, "credits": 2}).eq('email', p_user['email']).execute()
-                    st.toast(f"Removed Premium: {p_user['email']}")
+                    st.toast(f"Removed: {p_user['email']}")
                     time.sleep(1)
                     st.rerun()
-                
-                st.sidebar.markdown("---") # Separator line
+                st.sidebar.markdown("---")
         else:
             st.sidebar.info("No Active Premium Users.")
-            
     except Exception as e:
         st.sidebar.error("Loading Error...")
 
@@ -204,7 +197,7 @@ if st.sidebar.button("Logout"):
     del st.session_state.user_email
     st.rerun()
 
-# --- 7. MAIN APP TOOL ---
+# --- 7. MAIN APP TOOL (FIXED VIDEO ISSUE) ---
 has_access = user['is_premium'] or user['credits'] > 0
 
 if has_access:
@@ -219,7 +212,7 @@ if has_access:
         st.video(tfile.name)
         
         if st.button("✨ Make Viral Short (1 Credit)"):
-            with st.spinner("Processing..."):
+            with st.spinner("Processing (Applying Fixes)..."):
                 try:
                     clip = VideoFileClip(tfile.name)
                     dur = clip.duration
@@ -231,14 +224,28 @@ if has_access:
                     if new_w < w: sub = sub.crop(x1=w/2-new_w/2, width=new_w, height=h)
                     
                     out = "viral.mp4"
-                    sub.write_videofile(out, codec='libx264', audio_codec='aac', logger=None)
+                    
+                    # --- FIX START: YEH LINE VIDEO THEEK KAREGI ---
+                    sub.write_videofile(
+                        out, 
+                        codec='libx264', 
+                        audio_codec='aac', 
+                        ffmpeg_params=['-pix_fmt', 'yuv420p'], # <--- MAGIC FIX FOR BLACK SCREEN
+                        logger=None
+                    )
+                    # --- FIX END ---
                     
                     if not user['is_premium'] and not is_admin:
                         update_credits(user['email'], user['credits'])
                     
                     st.success("Video Ready!")
+                    
+                    # Display Video using bytes to ensure compatibility
                     with open(out, "rb") as f:
-                        st.download_button("Download Viral Short", f, "viral_short.mp4")
+                        video_bytes = f.read()
+                        st.video(video_bytes)
+                        st.download_button("Download Viral Short", video_bytes, "viral_short.mp4")
+                        
                 except Exception as e: st.error(f"Error: {e}")
 else:
     st.title("🔒 Quota Expired")
