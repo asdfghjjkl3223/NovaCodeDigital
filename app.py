@@ -148,7 +148,6 @@ st.sidebar.title("🛠️ Menu")
 if is_admin:
     st.sidebar.header("👮‍♂️ Admin Panel")
     
-    # --- ADD PREMIUM ---
     with st.sidebar.expander("➕ Add Premium User", expanded=True):
         add_email = st.text_input("Email Address:", placeholder="user@gmail.com")
         if st.button("Grant Premium ✅"):
@@ -159,14 +158,10 @@ if is_admin:
                 st.rerun()
 
     st.sidebar.markdown("---")
-    
-    # --- LIST & REMOVE PREMIUM ---
     st.sidebar.subheader("📋 Active Premium Users")
     
     try:
-        # Fetch data
         p_users = supabase.table('users').select("email").eq('is_premium', True).execute()
-        
         if p_users.data:
             for p_user in p_users.data:
                 if p_user['email'] == ADMIN_EMAIL: continue
@@ -182,8 +177,7 @@ if is_admin:
                 st.sidebar.markdown("---")
         else:
             st.sidebar.info("No Active Premium Users.")
-    except Exception as e:
-        st.sidebar.error("Loading Error...")
+    except: st.sidebar.error("Loading Error...")
 
 else:
     st.sidebar.write(f"User: **{user['email']}**")
@@ -197,7 +191,7 @@ if st.sidebar.button("Logout"):
     del st.session_state.user_email
     st.rerun()
 
-# --- 7. MAIN APP TOOL (FIXED VIDEO ISSUE) ---
+# --- 7. MAIN APP TOOL (FIXED EVEN WIDTH ISSUE) ---
 has_access = user['is_premium'] or user['credits'] > 0
 
 if has_access:
@@ -212,7 +206,7 @@ if has_access:
         st.video(tfile.name)
         
         if st.button("✨ Make Viral Short (1 Credit)"):
-            with st.spinner("Processing (Applying Fixes)..."):
+            with st.spinner("Processing (Auto-Fixing Dimensions)..."):
                 try:
                     clip = VideoFileClip(tfile.name)
                     dur = clip.duration
@@ -220,27 +214,35 @@ if has_access:
                     sub = clip.subclip(start, min(start+30, dur))
                     
                     w, h = sub.size
-                    new_w = h * (9/16)
-                    if new_w < w: sub = sub.crop(x1=w/2-new_w/2, width=new_w, height=h)
+                    
+                    # --- MATH FIX START: Ensure even numbers ---
+                    target_ratio = 9/16
+                    new_w = int(h * target_ratio)
+                    
+                    # Agar number Odd hai (2 se divide nahi hota), toh 1 minus kar do
+                    if new_w % 2 != 0:
+                        new_w -= 1
+                    
+                    # Resize crop logic
+                    if new_w < w:
+                        sub = sub.crop(x1=w/2-new_w/2, width=new_w, height=h)
+                    # --- MATH FIX END ---
                     
                     out = "viral.mp4"
                     
-                    # --- FIX START: YEH LINE VIDEO THEEK KAREGI ---
                     sub.write_videofile(
                         out, 
                         codec='libx264', 
                         audio_codec='aac', 
-                        ffmpeg_params=['-pix_fmt', 'yuv420p'], # <--- MAGIC FIX FOR BLACK SCREEN
+                        ffmpeg_params=['-pix_fmt', 'yuv420p'], # Mobile black screen fix
                         logger=None
                     )
-                    # --- FIX END ---
                     
                     if not user['is_premium'] and not is_admin:
                         update_credits(user['email'], user['credits'])
                     
                     st.success("Video Ready!")
                     
-                    # Display Video using bytes to ensure compatibility
                     with open(out, "rb") as f:
                         video_bytes = f.read()
                         st.video(video_bytes)
