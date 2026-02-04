@@ -9,7 +9,7 @@ from email.mime.text import MIMEText
 import random
 import time
 
-# --- CONFIGURATION & SECRETS ---
+# --- 1. CONFIGURATION & SECRETS ---
 try:
     GENAI_KEY = st.secrets["GEMINI_API_KEY"]
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -28,9 +28,8 @@ if GENAI_KEY != "TEST":
     genai.configure(api_key=GENAI_KEY)
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- HELPER FUNCTIONS ---
+# --- 2. HELPER FUNCTIONS ---
 TEMP_DOMAINS = ["tempmail", "10minutemail", "guerrillamail", "yopmail", "mailinator"]
-
 def is_temp_mail(email):
     if "@" in email:
         domain = email.split('@')[-1]
@@ -70,18 +69,17 @@ def update_credits(email, current_credits):
         supabase.table('users').update({"credits": current_credits - 1}).eq('email', email).execute()
     except: pass
 
-# --- UI CONFIG ---
+# --- 3. UI SETUP ---
 st.set_page_config(page_title="AI Viral Studio", page_icon="🎥", layout="wide")
 
-# --- AUTH SYSTEM ---
+# --- 4. LOGIN / SIGNUP ---
 if "user_email" not in st.session_state:
-    col1, col2 = st.columns([1, 2])
+    col1, col2 = st.columns([1, 1])
     with col1:
         st.title("👋 AI Viral Studio")
+        st.write("Login to create Viral Shorts.")
     with col2:
-        st.markdown("### Login / Signup")
         tab_login, tab_signup = st.tabs(["Login", "Create Account"])
-
         with tab_login:
             l_email = st.text_input("Email", key="l_email")
             l_pass = st.text_input("Password", type="password", key="l_pass")
@@ -95,14 +93,14 @@ if "user_email" not in st.session_state:
                     st.session_state.user_email = user['email']
                     st.rerun()
                 else: st.error("Invalid Credentials")
-
         with tab_signup:
             if "signup_step" not in st.session_state: st.session_state.signup_step = 1
             if st.session_state.signup_step == 1:
                 s_email = st.text_input("New Email", key="s_email")
                 s_pass = st.text_input("New Password", type="password", key="s_pass")
-                if st.button("Send OTP"):
+                if st.button("Get OTP"):
                     if is_temp_mail(s_email): st.error("No Temp Mail!")
+                    elif len(s_pass) < 4: st.warning("Weak Password")
                     else:
                         check = supabase.table('users').select("*").eq('email', s_email).execute()
                         if check.data: st.error("Exists!")
@@ -119,143 +117,138 @@ if "user_email" not in st.session_state:
                 otp_in = st.text_input("Enter OTP")
                 if st.button("Verify"):
                     if otp_in == st.session_state.otp:
-                        if register_user_final(st.session_state.temp_email, st.session_state.temp_pass):
-                            st.session_state.user_email = st.session_state.temp_email
-                            st.rerun()
+                        register_user_final(st.session_state.temp_email, st.session_state.temp_pass)
+                        st.session_state.user_email = st.session_state.temp_email
+                        st.rerun()
+                    else: st.error("Wrong OTP")
     st.stop()
 
-# --- MAIN LOGIC ---
+# --- 5. LOGGED IN LOGIC ---
 is_admin = False
 user = None
 if st.session_state.user_email == ADMIN_EMAIL:
-    user = {"email": ADMIN_EMAIL, "credits": 9999, "is_premium": True}
     is_admin = True
+    user = {"email": ADMIN_EMAIL, "credits": 9999, "is_premium": True}
 else:
     try:
         response = supabase.table('users').select("*").eq('email', st.session_state.user_email).execute()
         user = response.data[0] if response.data else None
-    except: user = None
+    except: pass
 
-# --- ADMIN DASHBOARD (NEW & IMPROVED) ---
-if is_admin:
-    st.sidebar.markdown("### 👮‍♂️ Admin Controls")
-    
-    # 1. ADD NEW PREMIUM
-    st.sidebar.markdown("---")
-    st.sidebar.write("➕ **Add Premium User**")
-    add_email = st.sidebar.text_input("Enter Email to Upgrade:")
-    if st.sidebar.button("Grant Premium ✅"):
-        if add_email:
-            supabase.table('users').update({"is_premium": True, "credits": 9999}).eq('email', add_email).execute()
-            st.sidebar.success(f"{add_email} Upgraded!")
-            time.sleep(1)
-            st.rerun()
-
-    # 2. LOGOUT
-    st.sidebar.markdown("---")
-    if st.sidebar.button("Logout Admin"):
-        del st.session_state.user_email
-        st.rerun()
-
-    # --- MAIN DASHBOARD AREA ---
-    st.title("Admin Dashboard")
-    st.subheader("📋 Active Premium Users List")
-
-    # Fetch all premium users
-    try:
-        response = supabase.table('users').select("*").eq('is_premium', True).execute()
-        premium_users = response.data
-        
-        if not premium_users:
-            st.info("Abhi koi Premium User nahi hai.")
-        else:
-            # Create a Header Row
-            c1, c2, c3 = st.columns([3, 2, 2])
-            c1.markdown("**Email ID**")
-            c2.markdown("**Status**")
-            c3.markdown("**Action**")
-            st.markdown("---")
-
-            # Loop through users and show them
-            for p_user in premium_users:
-                # Admin khud ko delete na kar sake
-                if p_user['email'] == ADMIN_EMAIL:
-                    continue
-
-                col1, col2, col3 = st.columns([3, 2, 2])
-                
-                col1.write(f"👤 {p_user['email']}")
-                col2.success("Premium Active")
-                
-                # DELETE BUTTON (Unique Key zaroori hai)
-                if col3.button("❌ Remove Premium", key=f"del_{p_user['email']}"):
-                    # Downgrade logic: Premium False, Credits 2
-                    supabase.table('users').update({"is_premium": False, "credits": 2}).eq('email', p_user['email']).execute()
-                    st.toast(f"Removed: {p_user['email']}")
-                    time.sleep(1)
-                    st.rerun()
-                
-                st.markdown("---")
-                
-    except Exception as e:
-        st.error(f"Error fetching data: {e}")
-
-# --- USER INTERFACE ---
-else:
-    if not user:
-        st.error("User not found.")
-        st.stop()
-        
-    st.sidebar.write(f"Logged in: **{user['email']}**")
-    
-    if user['is_premium']:
-        st.sidebar.success("🌟 Premium Plan Active")
-    else:
-        st.sidebar.info(f"Free Credits: {user['credits']}")
-        
+if not user:
+    st.error("Session Error.")
     if st.sidebar.button("Logout"):
         del st.session_state.user_email
         st.rerun()
+    st.stop()
 
-    # Access Check
-    has_access = user['is_premium'] or user['credits'] > 0
+# --- 6. SIDEBAR (ADMIN LIST FEATURE) ---
+st.sidebar.title("🛠️ Menu")
 
-    if has_access:
-        st.title("✂️ AI Viral Studio")
-        st.write("Upload Large Video (Max 1GB)")
+if is_admin:
+    st.sidebar.header("👮‍♂️ Admin Panel")
+    
+    # --- ADD PREMIUM ---
+    with st.sidebar.expander("➕ Add Premium User", expanded=True):
+        add_email = st.text_input("Email Address:", placeholder="user@gmail.com")
+        if st.button("Grant Premium ✅"):
+            if add_email:
+                supabase.table('users').update({"is_premium": True, "credits": 9999}).eq('email', add_email).execute()
+                st.success(f"Added: {add_email}")
+                time.sleep(1)
+                st.rerun()
+
+    st.sidebar.markdown("---")
+    
+    # --- LIST & REMOVE PREMIUM ---
+    st.sidebar.subheader("📋 Active Premium Users")
+    
+    try:
+        # Fetch data
+        p_users = supabase.table('users').select("email").eq('is_premium', True).execute()
         
-        uf = st.file_uploader("Upload MP4", type=["mp4"])
-        if uf:
-            tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-            tfile.write(uf.read())
-            st.video(tfile.name)
+        if p_users.data:
+            for p_user in p_users.data:
+                # Admin khud ko na dikhaye
+                if p_user['email'] == ADMIN_EMAIL:
+                    continue
+                
+                # Layout: Email | Remove Button
+                c1, c2 = st.sidebar.columns([3, 1])
+                
+                c1.text(p_user['email'])
+                
+                # Make Free Button
+                if c2.button("❌", key=f"rm_{p_user['email']}", help="Click to Make Free User"):
+                    supabase.table('users').update({"is_premium": False, "credits": 2}).eq('email', p_user['email']).execute()
+                    st.toast(f"Removed Premium: {p_user['email']}")
+                    time.sleep(1)
+                    st.rerun()
+                
+                st.sidebar.markdown("---") # Separator line
+        else:
+            st.sidebar.info("No Active Premium Users.")
             
-            if st.button("✨ Create Viral Short (1 Credit)"):
-                with st.spinner("Processing..."):
-                    try:
-                        clip = VideoFileClip(tfile.name)
-                        dur = clip.duration
-                        start = dur/3 if dur > 60 else 0
-                        sub = clip.subclip(start, min(start+30, dur))
-                        
-                        w, h = sub.size
-                        new_w = h * (9/16)
-                        if new_w < w: sub = sub.crop(x1=w/2-new_w/2, width=new_w, height=h)
-                        
-                        out = "viral.mp4"
-                        sub.write_videofile(out, codec='libx264', audio_codec='aac', logger=None)
-                        
-                        if not user['is_premium']:
-                            update_credits(user['email'], user['credits'])
-                            
-                        with open(out, "rb") as f:
-                            st.download_button("Download", f, "viral.mp4")
-                    except Exception as e: st.error(f"Error: {e}")
+    except Exception as e:
+        st.sidebar.error("Loading Error...")
+
+else:
+    st.sidebar.write(f"User: **{user['email']}**")
+    if user['is_premium']:
+        st.sidebar.success("🌟 Premium Active")
     else:
-        st.error("Quota Expired!")
-        st.markdown("### 🔓 Unlimited Access")
-        st.write("**Plan:** ₹99 / Month")
-        MY_NUMBER = "919575887748"
-        msg = f"Hello! ID: {user['email']}. I want Premium Plan ₹99."
-        url = f"https://wa.me/{MY_NUMBER}?text={msg.replace(' ', '%20')}"
-        st.link_button("👉 Buy Premium (WhatsApp)", url)
+        st.sidebar.info(f"Free Credits: {user['credits']}")
+
+st.sidebar.markdown("---")
+if st.sidebar.button("Logout"):
+    del st.session_state.user_email
+    st.rerun()
+
+# --- 7. MAIN APP TOOL ---
+has_access = user['is_premium'] or user['credits'] > 0
+
+if has_access:
+    st.title("✂️ AI Viral Studio")
+    st.write("Upload Video (Max 1GB)")
+    
+    uf = st.file_uploader("Upload MP4", type=["mp4"])
+    
+    if uf:
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        tfile.write(uf.read())
+        st.video(tfile.name)
+        
+        if st.button("✨ Make Viral Short (1 Credit)"):
+            with st.spinner("Processing..."):
+                try:
+                    clip = VideoFileClip(tfile.name)
+                    dur = clip.duration
+                    start = dur/3 if dur > 60 else 0
+                    sub = clip.subclip(start, min(start+30, dur))
+                    
+                    w, h = sub.size
+                    new_w = h * (9/16)
+                    if new_w < w: sub = sub.crop(x1=w/2-new_w/2, width=new_w, height=h)
+                    
+                    out = "viral.mp4"
+                    sub.write_videofile(out, codec='libx264', audio_codec='aac', logger=None)
+                    
+                    if not user['is_premium'] and not is_admin:
+                        update_credits(user['email'], user['credits'])
+                    
+                    st.success("Video Ready!")
+                    with open(out, "rb") as f:
+                        st.download_button("Download Viral Short", f, "viral_short.mp4")
+                except Exception as e: st.error(f"Error: {e}")
+else:
+    st.title("🔒 Quota Expired")
+    st.error("Free Credits khatam!")
+    
+    st.markdown("### 🔓 Unlimited Access")
+    st.write("💰 **Price: ₹99 / Month**")
+    
+    MY_NUMBER = "919575887748"
+    msg = f"Hello! My ID is {user['email']}. I want to buy Premium Plan for ₹99 for 1 Month."
+    url = f"https://wa.me/{MY_NUMBER}?text={msg.replace(' ', '%20')}"
+    
+    st.link_button("👉 Buy Premium on WhatsApp", url)
