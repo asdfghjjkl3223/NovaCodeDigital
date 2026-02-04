@@ -4,3 +4,4 @@ moviepy==1.0.3
 supabase
 ffmpeg-python
 imageio-ffmpeg
+opencv-python-headless
